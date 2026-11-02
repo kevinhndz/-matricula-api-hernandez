@@ -1,15 +1,45 @@
 services:
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: campusflow-api:local
+    container_name: campusflow-api-local
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - .env
     environment:
-      APP_ENV: production
-      COOKIE_SECURE: "true"
+      APP_ENV: development
+      COOKIE_SECURE: "false"
+      FRONTEND_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - uploads:/app/uploads
+    networks:
+      - red-saas
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:8000
+        VITE_INSTITUTION_SLUG: uphn
+    image: campusflow-frontend:local
+    container_name: campusflow-frontend-local
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:8080:80"
+    networks:
+      - red-saas
 
 volumes:
   uploads:
+
+networks:
+  red-saas:
+    name: red-saas
+    driver: bridge

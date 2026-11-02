@@ -31,18 +31,20 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Compilar frontend
+      - name: Comprobar compilacion del frontend
         run: |
           npm ci --prefix frontend
           npm run build --prefix frontend
 
-      - name: Construir imagen de API
-        run: docker build --pull --tag campusflow-api:main .
+      - name: Construir imagenes de API y frontend
+        run: |
+          docker build --pull --tag campusflow-api:main .
+          docker build --pull --tag campusflow-frontend:main ./frontend
 
-      - name: Empaquetar entrega
+      - name: Empaquetar imagenes
         run: |
           docker save campusflow-api:main | gzip -1 > /tmp/campusflow-api.tar.gz
-          tar -C frontend/dist -czf /tmp/campusflow-frontend.tar.gz .
+          docker save campusflow-frontend:main | gzip -1 > /tmp/campusflow-frontend.tar.gz
 
       - name: Preparar acceso seguro al VPS
         if: github.event_name != 'pull_request'
@@ -66,7 +68,7 @@ jobs:
             exit 1
           fi
 
-      - name: Copiar imagen y frontend al VPS
+      - name: Copiar imagenes al VPS
         if: github.event_name != 'pull_request'
         env:
           VPS_HOST: ${{ vars.CAMPUSFLOW_VPS_HOST }}
@@ -79,7 +81,7 @@ jobs:
           scp -i "$HOME/.ssh/campusflow_deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             /tmp/campusflow-api.tar.gz /tmp/campusflow-frontend.tar.gz "$destino:$carpeta/"
 
-      - name: Desplegar y verificar servicios
+      - name: Desplegar los dos servicios y verificar
         if: github.event_name != 'pull_request'
         env:
           VPS_HOST: ${{ vars.CAMPUSFLOW_VPS_HOST }}
@@ -92,26 +94,23 @@ jobs:
           version="$1"
           usuario="$2"
           repo=/srv/proyectos/CampusFlow
-          proxy=/srv/proyectos/ProxyNginx
           paquete="/home/$usuario/releases/$version"
-          anterior="campusflow-api:rollback-$version"
-          cambios=0
+          anterior_api="campusflow-api:rollback-$version"
+          anterior_frontend="campusflow-frontend:rollback-$version"
+          actualizado=0
 
           restaurar() {
             codigo="${1:-$?}"
             trap - ERR
-            if docker image inspect "$anterior" >/dev/null 2>&1; then
-              docker image tag "$anterior" campusflow-api:main || true
-            fi
-            if [ "$cambios" = 1 ]; then
-              cp "$paquete/compose.previous.yaml" "$proxy/compose.vps.yaml" || true
-              cp "$paquete/nginx.previous.conf" "$proxy/nginx-campusflow.conf" || true
-              if [ -d "$repo/frontend/dist.previous" ]; then
-                find "$repo/frontend/dist" -mindepth 1 -delete || true
-                cp -a "$repo/frontend/dist.previous/." "$repo/frontend/dist/" || true
+            if [ "$actualizado" = 1 ]; then
+              if docker image inspect "$anterior_api" >/dev/null 2>&1; then
+                docker image tag "$anterior_api" campusflow-api:main || true
               fi
-              (cd "$proxy" && docker compose -f compose.vps.yaml up -d --no-deps --force-recreate api nginx) || true
-              docker exec campusflow-nginx nginx -t || true
+              if docker image inspect "$anterior_frontend" >/dev/null 2>&1; then
+                docker image tag "$anterior_frontend" campusflow-frontend:main || true
+              fi
+              docker compose --project-name campusflow --project-directory "$repo" \
+                -f "$repo/deploy/compose.vps.yaml" up -d --no-deps --force-recreate api frontend || true
             fi
             exit "$codigo"
           }
@@ -121,30 +120,20 @@ jobs:
           git fetch origin main
           git reset --hard "$version"
           test "$(git rev-parse HEAD)" = "$version"
+          docker network inspect red-saas >/dev/null
 
           if docker image inspect campusflow-api:main >/dev/null 2>&1; then
-            docker image tag campusflow-api:main "$anterior"
-          elif docker image inspect campusflow-api:refactor >/dev/null 2>&1; then
-            docker image tag campusflow-api:refactor "$anterior"
+            docker image tag campusflow-api:main "$anterior_api"
           fi
+          if docker image inspect campusflow-frontend:main >/dev/null 2>&1; then
+            docker image tag campusflow-frontend:main "$anterior_frontend"
+          fi
+
+          actualizado=1
           docker load --input "$paquete/campusflow-api.tar.gz"
-
-          mkdir -p "$repo/frontend/dist.next"
-          find "$repo/frontend/dist.next" -mindepth 1 -delete
-          tar -xzf "$paquete/campusflow-frontend.tar.gz" -C "$repo/frontend/dist.next"
-          rm -rf "$repo/frontend/dist.previous"
-          cp "$proxy/compose.vps.yaml" "$paquete/compose.previous.yaml"
-          cp "$proxy/nginx-campusflow.conf" "$paquete/nginx.previous.conf"
-          cp -a "$repo/frontend/dist" "$repo/frontend/dist.previous"
-          cambios=1
-          find "$repo/frontend/dist" -mindepth 1 -delete
-          cp -a "$repo/frontend/dist.next/." "$repo/frontend/dist/"
-
-          cp deploy/compose.vps.yaml "$proxy/compose.vps.yaml"
-          cp deploy/nginx-campusflow.conf "$proxy/nginx-campusflow.conf"
-          cd "$proxy"
-          docker compose -f compose.vps.yaml up -d --no-deps --force-recreate api nginx
-          docker exec campusflow-nginx nginx -t
+          docker load --input "$paquete/campusflow-frontend.tar.gz"
+          docker compose --project-name campusflow --project-directory "$repo" \
+            -f "$repo/deploy/compose.vps.yaml" up -d --no-deps --force-recreate api frontend
 
           if ! curl --retry 8 --retry-delay 2 --retry-all-errors -fsS -o /dev/null \
             https://campusuphflow.duckdns.org/api/docs || ! curl --retry 8 --retry-delay 2 --retry-all-errors -fsS -o /dev/null \
@@ -152,9 +141,7 @@ jobs:
             restaurar 1
           fi
 
-          cambios=0
-          rm -rf "$repo/frontend/dist.previous"
-          rm -rf "$repo/frontend/dist.next"
-          docker image rm "$anterior" >/dev/null 2>&1 || true
+          actualizado=0
+          docker image rm "$anterior_api" "$anterior_frontend" >/dev/null 2>&1 || true
           rm -rf "$paquete"
           REMOTE

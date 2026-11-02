@@ -1,10 +1,7 @@
 services:
   api:
-    build:
-      context: /srv/proyectos/CampusFlow
-      dockerfile: Dockerfile
     image: campusflow-api:main
-    container_name: campusflow-api
+    container_name: campusflow-backend
     restart: unless-stopped
     env_file:
       - /srv/proyectos/CampusFlow/.env
@@ -15,29 +12,25 @@ services:
     volumes:
       - campusflow_uploads:/app/uploads
     networks:
-      - entrada_web
+      red-saas:
+        aliases:
+          - campusflow-backend
 
-  nginx:
-    image: nginx:alpine
-    container_name: campusflow-nginx
+  frontend:
+    image: campusflow-frontend:main
+    container_name: campusflow-frontend
     restart: unless-stopped
-    depends_on:
-      - api
-    ports:
-      - "${NGINX_HTTP_PORT:-80}:80"
-      - "${NGINX_HTTPS_PORT:-443}:443"
-    volumes:
-      - /srv/proyectos/ProxyNginx/nginx-campusflow.conf:/etc/nginx/conf.d/default.conf:ro
-      - /srv/proyectos/ProxyNginx/acme:/var/www/certbot:ro
-      - /srv/proyectos/ProxyNginx/letsencrypt:/etc/letsencrypt:ro
-      - /srv/proyectos/TiendaMGR/public:/usr/share/nginx/html/tiendamgr:ro
-      - /srv/proyectos/CampusFlow/frontend/dist:/usr/share/nginx/html/campusflow:ro
+    expose:
+      - "80"
     networks:
-      - entrada_web
+      red-saas:
+        aliases:
+          - campusflow-frontend
 
 volumes:
   campusflow_uploads:
 
 networks:
-  entrada_web:
+  red-saas:
+    name: red-saas
     external: true
