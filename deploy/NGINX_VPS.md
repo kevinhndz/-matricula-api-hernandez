@@ -1,6 +1,24 @@
-# Despliegue en VPS con Nginx
+# Despliegue en VPS con Nginx compartido
 
-La tienda existente y CampusFlow viven en carpetas separadas. Un solo contenedor Nginx sirve ambos sitios y envia `/api/` y `/uploads/` al contenedor de la API.
+El VPS usa un solo contenedor de Nginx, `nginx-recepcionista`, para las aplicaciones. CampusFlow aporta dos contenedores: `campusflow-frontend` y `campusflow-backend`. Los tres se conectan a la red Docker externa `red-saas`; solo el proxy publica los puertos 80 y 443.
+
+El Compose de CampusFlow esta en `deploy/compose.vps.yaml`. No inicia ni reconstruye el proxy. Antes de levantar CampusFlow, la red debe existir:
+
+```bash
+docker network inspect red-saas
+```
+
+El servicio Nginx compartido debe tener `red-saas` en su seccion `networks` y su configuracion debe enviar:
+
+- `/` a `http://campusflow-frontend:80`
+- `/api/` y `/uploads/` a `http://campusflow-backend:8000`
+
+La configuracion de referencia esta en `deploy/nginx-campusflow.conf`. Al integrarla con la configuracion existente, conserva los bloques de los otros dominios y los certificados que ya estan instalados. Verifica y recarga el proxy sin recrearlo:
+
+```bash
+docker exec nginx-recepcionista nginx -t
+docker exec nginx-recepcionista nginx -s reload
+```
 
 ## Dominios y HTTPS
 
@@ -12,10 +30,10 @@ Los dos dominios DuckDNS deben apuntar a la IP publica del VPS:
 Emite un certificado SAN que cubra ambos dominios con Certbot y webroot:
 
 ```bash
-mkdir -p /srv/proyectos/ProxyNginx/letsencrypt
+mkdir -p /srv/certbot-www
 docker run --rm \
-  -v /srv/proyectos/ProxyNginx/acme:/var/www/certbot \
-  -v /srv/proyectos/ProxyNginx/letsencrypt:/etc/letsencrypt \
+  -v /srv/certbot-www:/var/www/certbot \
+  -v /etc/letsencrypt:/etc/letsencrypt \
   certbot/certbot certonly --webroot -w /var/www/certbot \
   --register-unsafely-without-email --agree-tos --no-eff-email \
   -d campusuphflow.duckdns.org -d tiendamgr.duckdns.org
@@ -23,14 +41,7 @@ docker run --rm \
 
 El Nginx usa ese certificado para ambos sitios y redirige HTTP a HTTPS, excepto la ruta de validacion ACME.
 
-## Activar Nginx
-
-En `/srv/proyectos/ProxyNginx`, recrea el proxy despues de copiar la configuracion actualizada:
-
-```bash
-docker compose -f compose.vps.yaml up -d --force-recreate nginx
-docker exec campusflow-nginx nginx -t
-```
+## Configurar CampusFlow
 
 Configura la API para el dominio final en `/srv/proyectos/CampusFlow/.env`:
 
@@ -40,10 +51,10 @@ COOKIE_SECURE=true
 FRONTEND_ORIGINS=https://campusuphflow.duckdns.org
 ```
 
-Recrea el contenedor de API para que cargue los cambios:
+El despliegue de CampusFlow levanta o reemplaza solo sus dos servicios:
 
 ```bash
-docker compose -f /srv/proyectos/ProxyNginx/compose.vps.yaml up -d --force-recreate api
+docker compose -f /srv/proyectos/CampusFlow/deploy/compose.vps.yaml up -d api frontend
 ```
 
 ## Renovacion automatica

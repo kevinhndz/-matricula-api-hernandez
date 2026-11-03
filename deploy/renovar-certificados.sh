@@ -2,8 +2,8 @@
 set -eu
 
 docker run --rm \
-  -v /srv/proyectos/ProxyNginx/acme:/var/www/certbot \
-  -v /srv/proyectos/ProxyNginx/letsencrypt:/etc/letsencrypt \
+  -v /srv/certbot-www:/var/www/certbot \
+  -v /etc/letsencrypt:/etc/letsencrypt \
   certbot/certbot renew --webroot -w /var/www/certbot --quiet
 
-docker exec campusflow-nginx nginx -s reload
+docker exec nginx-recepcionista nginx -s reload
